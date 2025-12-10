@@ -1,6 +1,7 @@
 package Offline1;
 
 import java.net.*;
+import java.util.Date;
 import java.io.*;
 
 public class client {
@@ -10,6 +11,7 @@ public class client {
     static int fileSize = 0;
     static String fileType = "";
     static int chunkSize = 0;
+    static String userName = "";
 
     static void showMenu() {
         System.out.println("Capability List: ");
@@ -36,6 +38,11 @@ public class client {
         }
     }
 
+    static void showPublicFiles() throws IOException, ClassNotFoundException {
+        String ownFiles = (String) in.readObject();
+        System.out.println(ownFiles);
+    }
+
     static void uploadFile() {
         try {
             File file = new File(fileName);
@@ -56,11 +63,12 @@ public class client {
                 totalBytesRead += bytesRead;
                 String acknowledgement = (String) in.readObject();
                 System.out.println("Server: " + acknowledgement);
-                out.writeObject("Uploaded " + totalBytesRead + " of " + fileSize + " bytes");
-                out.flush();
+
             }
             out.writeObject("EOF");
             out.flush();
+            // out.writeObject("Uploaded " + totalBytesRead + " of " + fileSize + " bytes");
+            // out.flush();
             fileIn.close();
             System.out.println("File upload completed locally.");
             String serverResponse = (String) in.readObject();
@@ -90,15 +98,11 @@ public class client {
             fileType = userInput.readLine();
             out.writeObject("Uploading File: " + fileName + " and size: " + fileSize + " and type: " + fileType);
             out.flush();
-            // System.out.println("Response " + (String) in.readObject());
             String message1 = (String) in.readObject();
-            System.out.println("Response from server: " + message1);
+            System.out.println("Response from server: \n" + message1);
             String message2 = (String) in.readObject();
-            System.out.println("File upload initiated for " + message2);
-            String message = (String) in.readObject();
-            String message3 = (String) in.readObject();
-            System.out.println("File upload progress: " + message3);
-            String[] parts = message3.split(" ");
+            System.out.println("File upload progress: " + message2);
+            String[] parts = message2.split(" ");
             chunkSize = Integer.parseInt(parts[1]);
             uploadFile();
 
@@ -107,6 +111,42 @@ public class client {
         } catch (ClassNotFoundException e) {
             System.err.println("ClassNotFoundException: " + e.getMessage());
         }
+    }
+
+    static void handleDownload() throws IOException, ClassNotFoundException {
+        BufferedReader br = new BufferedReader(new InputStreamReader((System.in)));
+        System.out.println("Enter the files to download: ");
+        fileName = br.readLine();
+        out.writeObject(fileName);
+        out.flush();
+        downloadFiles();
+    }
+
+    static void downloadFiles() throws ClassNotFoundException, IOException {
+        File fi = new File("downloads/");
+        if (!fi.exists()) {
+            fi.mkdir();
+        }
+        File download = new File(fi, fileName);
+        FileOutputStream fos = new FileOutputStream(download);
+        ByteArrayOutputStream memoryBuffer = new ByteArrayOutputStream();
+        while (true) {
+            Object obj = in.readObject();
+
+            if (obj instanceof String && ((String) obj).equals("EOF")) {
+                break;
+            }
+
+            if (obj instanceof byte[]) {
+                byte[] chunkData = (byte[]) obj;
+                memoryBuffer.write(chunkData);
+            }
+        }
+        String response = (String) in.readObject();
+        System.out.println("Server: " + response);
+        fos.write(memoryBuffer.toByteArray());
+        fos.close();
+        System.out.println("File downloaded successfully to: " + download.getAbsolutePath());
     }
 
     static void handleFileReq() {
@@ -119,7 +159,7 @@ public class client {
             System.out.println("Please Enter the username of the user: ");
             str = br.readLine();
             sb.append(str);
-            out.writeObject(sb);
+            out.writeObject(sb.toString());
             out.flush();
         } catch (IOException e) {
             System.err.println("IOException: " + e.getMessage());
@@ -139,49 +179,42 @@ public class client {
 
     }
 
-    static void handleClientOption(int option) {
+    static void showClients() throws IOException, ClassNotFoundException {
+        System.out.println((String) in.readObject());
+
+    }
+
+    static void handleClientOption(int option) throws ClassNotFoundException, IOException {
+        out.writeObject("Capability Option: " + option);
+        out.flush();
+        String serverAck = (String) in.readObject();
+        System.out.println(serverAck);
         switch (option) {
             case 1:
                 System.out.println("You selected: Connected Client Lists");
-                try {
-                    out.writeObject("Capability Option: 1");
-                    out.flush();
-
-                } catch (IOException e) {
-                    System.err.println("IOException: " + e.getMessage());
-                }
+                showClients();
                 break;
             case 2:
                 System.out.println("You selected: Looking for Own Files");
-                try {
-                    out.writeObject("Capability Option: 2");
-                    out.flush();
-                    handleOwnFiles();
-
-                } catch (IOException e) {
-                    System.err.println("IOException: " + e.getMessage());
-                }
+                handleOwnFiles();
                 break;
             case 3:
                 System.out.println("You selected: Upload File to Server");
-                try {
-                    out.writeObject("Capability Option: 3");
-                    out.flush();
-                    handleUploadedFilesOption();
-
-                } catch (IOException e) {
-                    System.err.println("IOException: " + e.getMessage());
-                }
+                handleUploadedFilesOption();
                 break;
             case 4:
                 System.out.println("You selected: Download File from Server");
+                handleDownload();
                 break;
             case 5:
-                System.out.println("You selected: Looking for Own Files");
+                System.out.println("You selected: Looking for Other's Public Files");
+                showPublicFiles();
                 break;
             case 6:
                 System.out.println("You selected: Looking for Private Files(Request needed)");
                 handleFileReq();
+                String reqResponse = (String) in.readObject();
+                System.out.println(reqResponse);
                 break;
             case 7:
                 System.out.println("You selected: Looking for Unread Messages");
@@ -189,28 +222,17 @@ public class client {
                 break;
             case 8:
                 System.out.println("You selected: Upload & Download History");
-                try {
-                    out.writeObject("Capability Option: 8");
-                    out.flush();
-                    String logHistory = (String) in.readObject();
-                    System.out.println("Upload & Download History:\n" + logHistory);
-                } catch (IOException e) {
-                    System.err.println("IOException: " + e.getMessage());
-                } catch (ClassNotFoundException e) {
-                    System.err.println("ClassNotFoundException: " + e.getMessage());
-                }
+                String logHistory = (String) in.readObject();
+                System.out.println("Upload & Download History:\n" + logHistory);
                 break;
             case 9:
                 System.out.println("Logout");
-                try {
-                    out.writeObject("logout");
-                    out.flush();
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
+                String logoutMsg = (String) in.readObject();
+                System.out.println(logoutMsg);
+                System.exit(0);
                 break;
             default:
-                System.out.println("Invalid option. Please select a valid capability option number (1-8).");
+                System.out.println("Invalid option.");
         }
     }
 
@@ -224,9 +246,9 @@ public class client {
             out = new ObjectOutputStream(socket.getOutputStream());
             out.flush();
             in = new ObjectInputStream(socket.getInputStream());
-
             out.writeObject("Username: " + username);
             out.flush();
+            userName = username;
             String response = (String) in.readObject();
 
             System.out.println("Server: " + response);
@@ -240,15 +262,29 @@ public class client {
                 System.out.println("Invalid Capability Option. Exiting...");
                 socket.close();
                 return;
-            } else {
+            }
+            while (true) {
                 showMenu();
-                int option = Integer.parseInt(userInput.readLine());
-                while (option < 1 || option > 8) {
-                    System.out.println("Invalid option. Please select a valid capability option number (1-8):");
+                int option;
+                try {
                     option = Integer.parseInt(userInput.readLine());
+                } catch (NumberFormatException e) {
+                    System.out.println("Invalid input. Please enter a number between 1-9.");
+                    continue;
+                }
+
+                if (option < 1 || option > 9) {
+                    System.out.println("Invalid option. Exiting...");
+                    break;
+                }
+
+                if (option == 9) {
+                    handleClientOption(option);
+                    break;
                 }
                 handleClientOption(option);
-
+                System.out.println("\n--- Press Enter to continue ---");
+                userInput.readLine();
             }
             // while (true) {
             // }

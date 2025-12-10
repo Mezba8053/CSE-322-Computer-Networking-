@@ -1,4 +1,4 @@
-package Offline;
+package Offline1;
 
 import java.net.Socket;
 import java.net.ServerSocket;

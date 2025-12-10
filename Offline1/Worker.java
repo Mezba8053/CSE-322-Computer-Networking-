@@ -13,7 +13,7 @@ public class Worker extends Thread {
     ObjectInputStream in;
     String name = "";
     List<String> uploadedFiles = new ArrayList<>();
-    Map<String, String> unreadMessages = new HashMap<>();
+    static Map<String, String> unreadMessages = new HashMap<>();
     int maxBufferSize;
     int remainingBufferSize;
     int minChunkSize;
@@ -41,13 +41,16 @@ public class Worker extends Thread {
 
     public void checkOnlineClients() {
         try {
+            StringBuilder sb = new StringBuilder();
             for (Map.Entry<Socket, String> entry : Clients.entrySet()) {
                 Socket s = entry.getKey();
-                if (!s.isClosed()) {
-                    out.writeObject(entry.getValue());
-                    out.flush();
+                if (!s.isClosed() && s.isConnected()) {
+                    sb.append(entry.getValue());
+                    sb.append("\n");
                 }
             }
+            out.writeObject(sb.toString());
+            out.flush();
         } catch (Exception e) {
             System.err.println("Error checking online clients: " + e.getMessage());
         }
@@ -93,48 +96,64 @@ public class Worker extends Thread {
         }
     }
 
+    public void showPublicFiles() throws IOException {
+        StringBuilder sb = new StringBuilder();
+        sb.append("All Public Files\n");
+        for (String str : clientNames) {
+            File usrDir = new File(str + "/public/");
+            if (usrDir.exists() && usrDir.isDirectory()) {
+                String[] fileList = usrDir.list();
+                sb.append("User: ").append(str).append("\n");
+                // File publicDir = new File(str + "/public/");
+                if (fileList != null && fileList.length > 0) {
+                    for (String string : fileList) {
+                        sb.append(" - ").append(string);
+                    }
+                }
+                sb.append("\n");
+            }
+        }
+        out.writeObject(sb.toString());
+        out.flush();
+    }
+
     public void handleClientsOwnFiles() {
         try {
             File userDir = new File(ROOT_DIR);
-            String[] filesList;
-            if (userDir.exists() && userDir.isDirectory()) {
-                out.writeObject("Your files:" + "\n");
-                out.flush();
-                out.writeObject("Public Files:" + "\n");
-                out.flush();
-                File publicDir = new File(PUBLIC_DIR);
-                filesList = publicDir.list();
-                if (filesList != null && filesList.length > 0) {
-                    for (String fileName : filesList) {
-                        out.writeObject(fileName);
-                        out.flush();
-                    }
-                    filesList = null;
-                }
-                File privateDir = new File(PRIVATE_DIR);
-                out.writeObject("Private Files:" + "\n");
-                out.flush();
-                filesList = privateDir.list();
+            StringBuilder result = new StringBuilder();
 
+            if (userDir.exists() && userDir.isDirectory()) {
+                // result.append("Your Files \n");
+                result.append(" - Public Files:\n");
+                File publicDir = new File(name + "/public/");
+                String[] filesList = publicDir.list();
                 if (filesList != null && filesList.length > 0) {
                     for (String fileName : filesList) {
-                        out.writeObject(fileName);
-                        out.flush();
+                        result.append("  - ").append(fileName).append("\n");
                     }
                 }
-            } else {
-                out.writeObject("User directory does not exist.");
-                out.flush();
+
+                result.append("\nPrivate Files:\n");
+                File privateDir = new File(name + "/private/");
+                filesList = privateDir.list();
+                if (filesList != null && filesList.length > 0) {
+                    for (String fileName : filesList) {
+                        result.append("  - ").append(fileName).append("\n");
+                    }
+                }
             }
+
+            out.writeObject(result.toString());
             out.flush();
+
         } catch (IOException e) {
             System.err.println("Error handling client's own files: " + e.getMessage());
         }
     }
 
-    public void uploadFiles(String fileName, int fileSize) {
+    public void uploadFiles(String fileName, int fileSize, String fileType) {
         try {
-            String fileFolder = ROOT_DIR + "public/";
+            String fileFolder = ROOT_DIR + fileType + "/";
             File fileDir = new File(fileFolder);
             if (!fileDir.exists()) {
                 fileDir.mkdirs();
@@ -157,27 +176,25 @@ public class Worker extends Thread {
                     out.writeObject("Received chunk of size: " + chunkData.length);
                     out.flush();
                 }
-                if (((String) in.readObject()).startsWith("Uploaded ")) {
-                    if (totalReceived != fileSize) {
-                        System.out.println("Mismatch in received data size!");
-                        out.writeObject("Failure on Uploading");
-                        out.flush();
-                        writeOnLogFile("Action: Upload Failed for file " + fileName + " Date: " + new Date().toString()
-                                + " Action type: Upload" + " status: Failed");
-                        file.delete();
-                        return;
-                    } else {
-                        fos.write(memoryBuffer.toByteArray());
-                        out.writeObject("Upload Successful");
-                        out.flush();
-                        writeOnLogFile("Action: Upload Successful for file " + fileName + " Date: "
-                                + new Date().toString() + " Action type: Upload" + " status: Success");
-                    }
-                }
-            }
 
+            }
+            if (totalReceived != fileSize) {
+                System.out.println("Mismatch in received data size!");
+                out.writeObject("Failure on Uploading");
+                out.flush();
+                writeOnLogFile("Action: Upload Failed for file " + fileName + " Date: " + new Date().toString()
+                        + " Action type: Upload" + " status: Failed");
+                file.delete();
+                return;
+            } else {
+                fos.write(memoryBuffer.toByteArray());
+                out.writeObject("Upload Successful");
+                out.flush();
+                remainingBufferSize -= totalReceived;
+                writeOnLogFile("Action: Upload Successful for file " + fileName + " Date: "
+                        + new Date().toString() + " Action type: Upload" + " status: Success");
+            }
             fos.close();
-            remainingBufferSize -= totalReceived;
 
             // out.writeObject("File upload completed. Total size: " + totalReceived);
             // out.flush();
@@ -192,43 +209,102 @@ public class Worker extends Thread {
     public void handleUploadedFiles() {
         try {
             String fileInfo = (String) in.readObject();
+            StringBuilder sb = new StringBuilder();
             if (fileInfo.startsWith("Uploading File: ")) {
-                out.writeObject("Server received file info: " + fileInfo);
-                out.flush();
+                sb.append("Server received file info: " + fileInfo);
                 String[] fileParts = fileInfo.split(" and ");
                 String uploadFileName = fileParts[0].substring(16).trim(); // "Uploading File: " is 16 chars
                 int uploadFileSize = Integer.parseInt(fileParts[1].substring(6).trim());
                 String uploadFileType = fileParts[2].substring(6).trim();
-                out.writeObject(uploadFileName + " " + uploadFileSize + " " + uploadFileType);
-                out.flush();
+                sb.append(uploadFileName + " " + uploadFileSize + " " + uploadFileType);
                 if (remainingBufferSize < uploadFileSize) {
-                    out.writeObject("Sorry storage has exceeded its limit. Please try again later.");
+                    sb.append("Sorry storage has exceeded its limit. Please try again later.");
+                    out.writeObject(sb.toString());
                     out.flush();
                 } else {
                     // File uploadedFile = new File("uploads/" + name + "/" + uploadFileName);
                     int chunk = (int) (Math.random() * (maxChunkSize - minChunkSize + 1));
+                    out.writeObject(sb.toString());
+                    out.flush();
                     String fileId = uploadFileName + String.valueOf(chunk);
                     out.writeObject("chunks " + chunk +
                             " fileid " + fileId);
                     out.flush();
-                    uploadFiles("A1.pdf", uploadFileSize);
+                    uploadFiles(uploadFileName, uploadFileSize, uploadFileType);
                 }
+
             }
         } catch (IOException | ClassNotFoundException e) {
             System.err.println("Error handling uploaded files: " + e.getMessage());
         }
     }
 
-    public void downloadFiles() {
+    public void handledownloadFiles() throws IOException, ClassNotFoundException {
+        String fileName = (String) in.readObject();
+        boolean isFound = false;
+        File pub = new File(PUBLIC_DIR);
+        if (pub.exists() && pub.isDirectory()) {
+            String[] fileList = pub.list();
+            String location = pub + fileName + "/";
+            if (fileList != null && Arrays.asList(fileList).contains(fileName)) {
+                isFound = true;
+                downloadFiles(fileName, location);
+            }
+        }
+        File pri = new File(PRIVATE_DIR);
+        if (pri.exists() && pri.isDirectory()) {
+            String[] fileList = pri.list();
+            String location = pri + fileName + "/";
+            if (fileList != null && Arrays.asList(fileList).contains(fileName)) {
+                isFound = true;
+                downloadFiles(fileName, location);
+            }
+        }
+        if (!isFound) {
+            out.writeObject("Sorry File not found!");
+            out.flush();
+        }
 
     }
 
-    public void logOut() {
+    public void downloadFiles(String fileName, String location) throws IOException {
+        File download = new File(location);
+        FileInputStream fis = new FileInputStream(download);
+        byte[] buffer = new byte[maxChunkSize];
+        int bytesRead;
+        int totalBytesRead = 0;
+        while ((bytesRead = fis.read(buffer)) != -1) {
+            byte[] chunkToSend;
+            if (bytesRead == maxChunkSize) {
+                chunkToSend = buffer;
+            } else {
+                chunkToSend = new byte[bytesRead];
+                System.arraycopy(buffer, 0, chunkToSend, 0, bytesRead);
+            }
+            out.writeObject(chunkToSend);
+            out.flush();
+            totalBytesRead += bytesRead;
+
+        }
+        out.writeObject("EOF");
+        out.flush();
+        fis.close();
+        out.writeObject("Download Successful");
+        out.flush();
+        writeOnLogFile("Action: Download Successful for file " + fileName + " Date: "
+                + new Date().toString() + " Action type: Download" + " status: Success");
+    }
+
+    public void logOut() throws IOException {
+
+        out.writeObject("User '" + name + "' logged out.");
+        out.flush();
+        Clients.remove(socket);
         try {
             socket.close();
-        } catch (IOException e) {
-            e.printStackTrace();
+        } catch (IOException ignore) {
         }
+
     }
 
     public void sendMessageToAll(String reqFile, String reqId) throws IOException {
@@ -271,6 +347,7 @@ public class Worker extends Thread {
         } else {
             out.writeObject("Request has been sent.Request Id :" + reqId);
             out.flush();
+
             found = false;
         }
     }
@@ -307,7 +384,7 @@ public class Worker extends Thread {
         unreadMessages.remove(name);
     }
 
-    public void handleOption(int option) throws IOException {
+    public void handleOption(int option) throws IOException, ClassNotFoundException {
         switch (option) {
             case 1:
                 checkOnlineClients();
@@ -319,11 +396,10 @@ public class Worker extends Thread {
                 handleUploadedFiles();
                 break;
             case 4:
-                downloadFiles();
+                handledownloadFiles();
                 break;
             case 5:
-                out.writeObject("Public files feature coming soon.");
-                out.flush();
+                showPublicFiles();
                 break;
             case 6:
                 handleFileRequests();
@@ -336,7 +412,7 @@ public class Worker extends Thread {
                 break;
             case 9:
                 logOut();
-                break;
+                throw new IOException("User logged out");
             default:
                 out.writeObject("Invalid option selected.");
                 out.flush();
@@ -352,23 +428,22 @@ public class Worker extends Thread {
             String userName = (String) in.readObject();
             if (userName.startsWith("Username: ")) {
                 name = userName.substring(10).trim();
-                synchronized (clientNames) {
-                    if (!clientNames.contains(name)) {
-                        clientNames.add(name);
-                        out.writeObject("Welcome, " + name + "!");
-                        out.flush();
-                        Initialization();
-                        createFolder(name);
-                        Clients.put(socket, name);
-                        System.out.println("User '" + name + "' connected.");
-                        // break;
-                    } else {
-                        out.writeObject("Username already taken. Please try another one.");
-                        out.flush();
-                        socket.close();
-                        return;
-                    }
+                if (!clientNames.contains(name)) {
+                    clientNames.add(name);
+                    out.writeObject("Welcome, " + name + "!");
+                    out.flush();
+                    Initialization();
+                    createFolder(name);
+                    Clients.put(socket, name);
+                    System.out.println("User '" + name + "' connected.");
+                    // break;
+                } else {
+                    out.writeObject("Username already taken. Please try another one.");
+                    out.flush();
+                    socket.close();
+                    return;
                 }
+
             }
             String capability = (String) in.readObject();
             // int option=(int) in.readObject();
@@ -380,21 +455,27 @@ public class Worker extends Thread {
                 handleOption(option);
             }
 
-            // System.out.println("Worker for user '" + name + "' is now running.");
             while (true) {
-                String command = (String) in.readObject();
-                System.out.println(name + " sent: " + command);
+                String capa = (String) in.readObject();
 
-                if (command.equalsIgnoreCase("EXIT")) {
-                    out.writeObject("Goodbye " + name + "!");
+                if (capa.startsWith("Capability Option: ")) {
+                    int option = Integer.parseInt(capa.substring(19).trim());
+                    System.out.println("User " + name + " selected option: " + option);
+                    out.writeObject("Server : Option " + option + " received.");
                     out.flush();
-                    break;
+                    handleOption(option);
                 }
-                out.writeObject("Received: " + command);
-                out.flush();
             }
         } catch (IOException | ClassNotFoundException e) {
             e.printStackTrace();
+        } finally {
+            try {
+                Clients.remove(socket);
+                socket.close();
+            } catch (IOException ignore) {
+                System.out.println("Cleanup complete for user '" + name + "'.");
+
+            }
         }
     }
 }
