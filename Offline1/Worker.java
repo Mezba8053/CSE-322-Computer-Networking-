@@ -242,25 +242,25 @@ public class Worker extends Thread {
     public void handledownloadFiles() throws IOException, ClassNotFoundException {
         String fileName = (String) in.readObject();
         boolean isFound = false;
-        File pub = new File(PUBLIC_DIR);
-        if (pub.exists() && pub.isDirectory()) {
-            String[] fileList = pub.list();
-            String location = pub + fileName + "/";
-            if (fileList != null && Arrays.asList(fileList).contains(fileName)) {
-                isFound = true;
-                downloadFiles(fileName, location);
-            }
+        String fileType = (String) in.readObject();
+        File pub = new File(ROOT_DIR + "/public/" + fileName);
+        if (pub.exists() && pub.isFile() && (fileType.equals(" ") || fileType.equals("public"))) {
+            isFound = true;
+            String location = pub + fileName;
+            downloadFiles(fileName, pub.getAbsolutePath());
+
         }
-        File pri = new File(PRIVATE_DIR);
-        if (pri.exists() && pri.isDirectory()) {
-            String[] fileList = pri.list();
-            String location = pri + fileName + "/";
-            if (fileList != null && Arrays.asList(fileList).contains(fileName)) {
+        if (!isFound) {
+            File pri = new File(ROOT_DIR + "/private/" + fileName);
+            if (pri.exists() && pri.isFile() && (fileType.equals(" ") || fileType.equals("private"))) {
                 isFound = true;
-                downloadFiles(fileName, location);
+                downloadFiles(fileName, pri.getAbsolutePath());
+
             }
         }
         if (!isFound) {
+            out.writeObject("EOF");
+            out.flush();
             out.writeObject("Sorry File not found!");
             out.flush();
         }
@@ -269,6 +269,13 @@ public class Worker extends Thread {
 
     public void downloadFiles(String fileName, String location) throws IOException {
         File download = new File(location);
+        if (!download.exists() || !download.isFile()) {
+            out.writeObject("EOF");
+            out.flush();
+            out.writeObject("File does not exist or is not a file.");
+            out.flush();
+            return;
+        }
         FileInputStream fis = new FileInputStream(download);
         byte[] buffer = new byte[maxChunkSize];
         int bytesRead;

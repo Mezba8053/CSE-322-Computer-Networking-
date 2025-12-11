@@ -119,6 +119,12 @@ public class client {
         fileName = br.readLine();
         out.writeObject(fileName);
         out.flush();
+        System.out.println("Enter the file type: ");
+        fileType = " ";
+        fileType = br.readLine();
+        out.writeObject(fileType);
+        out.flush();
+
         downloadFiles();
     }
 
@@ -128,7 +134,6 @@ public class client {
             fi.mkdir();
         }
         File download = new File(fi, fileName);
-        FileOutputStream fos = new FileOutputStream(download);
         ByteArrayOutputStream memoryBuffer = new ByteArrayOutputStream();
         while (true) {
             Object obj = in.readObject();
@@ -144,9 +149,15 @@ public class client {
         }
         String response = (String) in.readObject();
         System.out.println("Server: " + response);
-        fos.write(memoryBuffer.toByteArray());
-        fos.close();
-        System.out.println("File downloaded successfully to: " + download.getAbsolutePath());
+        if (memoryBuffer.size() > 0) {
+            FileOutputStream fos = new FileOutputStream(download);
+            fos.write(memoryBuffer.toByteArray());
+            fos.close();
+            System.out.println("File downloaded successfully to: " + download.getAbsolutePath());
+            System.out.println("File size: " + memoryBuffer.size() + " bytes");
+        } else {
+            System.out.println("Download failed: No data received (file not found or empty).");
+        }
     }
 
     static void handleFileReq() {
