@@ -197,8 +197,6 @@ public class Worker extends Thread {
             }
             fos.close();
 
-            // out.writeObject("File upload completed. Total size: " + totalReceived);
-            // out.flush();
             System.out.println("File saved successfully to: " + file.getAbsolutePath());
 
         } catch (IOException | ClassNotFoundException e) {

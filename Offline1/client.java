@@ -3,7 +3,6 @@ package Offline1;
 import java.net.*;
 import java.util.ArrayList;
 import java.util.*;
-
 import java.io.*;
 
 public class client {
@@ -16,7 +15,6 @@ public class client {
     static String userName = "";
     static String requestId = "";
     static String reqClientName = "";
-
     static boolean isReq = false;
 
     static void showMenu() {
@@ -159,8 +157,6 @@ public class client {
                 out.flush();
                 System.out
                         .println("Request ID sent: " + requestId + " fileType: " + fileType + " fileName: " + fileName);
-                // String message3 = (String) in.readObject();
-                // System.out.println("Response from server: \n" + message3);
 
             }
             String message1 = (String) in.readObject();
@@ -208,9 +204,13 @@ public class client {
     static void downloadFiles() throws ClassNotFoundException, IOException {
         File fi = new File("downloads/" + userName);
         if (!fi.exists()) {
-            fi.mkdir();
+            fi.mkdirs();
         }
         File download = new File(fi, fileName);
+        File parentDir = download.getParentFile();
+        if (!parentDir.exists()) {
+            parentDir.mkdirs();
+        }
         ByteArrayOutputStream memoryBuffer = new ByteArrayOutputStream();
         while (true) {
             Object obj = in.readObject();
@@ -362,7 +362,6 @@ public class client {
             BufferedReader userInput = new BufferedReader(new InputStreamReader(System.in));
             String username = userInput.readLine();
             Socket socket = new Socket("localhost", 6666);
-            // SyPainstem.out.println("Connected to proxy server");
             out = new ObjectOutputStream(socket.getOutputStream());
             out.flush();
             in = new ObjectInputStream(socket.getInputStream());
@@ -406,8 +405,6 @@ public class client {
                 System.out.println("\n--- Press Enter to continue ---");
                 userInput.readLine();
             }
-            // while (true) {
-            // }
 
             while (true) {
                 // System.out.println("Response from server: " + (String) in.readObject());
