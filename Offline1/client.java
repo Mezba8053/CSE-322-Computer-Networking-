@@ -1,7 +1,9 @@
 package Offline1;
 
 import java.net.*;
-import java.util.Date;
+import java.util.ArrayList;
+import java.util.*;
+
 import java.io.*;
 
 public class client {
@@ -12,6 +14,10 @@ public class client {
     static String fileType = "";
     static int chunkSize = 0;
     static String userName = "";
+    static String requestId = "";
+    static String reqClientName = "";
+
+    static boolean isReq = false;
 
     static void showMenu() {
         System.out.println("Capability List: ");
@@ -20,10 +26,11 @@ public class client {
         System.out.println("3. Upload File to Server:");
         System.out.println("4. Download File from Server:");
         System.out.println("5. Looking for Public Files:");
-        System.out.println("6. Looking for Private Files(Request needed):");
+        System.out.println("6. Requesting for a File(Request needed):");
         System.out.println("7. Looking for Unread Messages:");
         System.out.println("8. Upload & Download History:");
-        System.out.println("9. Exit");
+        System.out.println("9. Send Message");
+        System.out.println("10. Exit");
         System.out.println("Select your desired capability option number:");
     }
 
@@ -41,6 +48,37 @@ public class client {
     static void showPublicFiles() throws IOException, ClassNotFoundException {
         String ownFiles = (String) in.readObject();
         System.out.println(ownFiles);
+    }
+
+    static void sendMessage() {
+        try {
+            BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
+            System.out.println("Enter the recipient's username: ");
+            String recipient = br.readLine();
+            out.writeObject(recipient);
+            out.flush();
+            String serverPrompt = (String) in.readObject();
+            System.out.println(serverPrompt);
+            if (serverPrompt.contains("Sorry Wrong Client Name")) {
+                System.out.println("Message not sent.");
+                return;
+            } else {
+                System.out.println("Recipient found: " + serverPrompt);
+            }
+            System.out.println("Enter your message: ");
+            String message = br.readLine();
+            StringBuilder sb = new StringBuilder();
+            sb.append("To: " + recipient + "\nMessage: " + message);
+            String fullMessage = sb.toString();
+            out.writeObject(fullMessage);
+            out.flush();
+            String serverResponse = (String) in.readObject();
+            System.out.println("Server: " + serverResponse);
+        } catch (IOException e) {
+            System.err.println("IOException: " + e.getMessage());
+        } catch (ClassNotFoundException e) {
+            System.err.println("ClassNotFoundException: " + e.getMessage());
+        }
     }
 
     static void uploadFile() {
@@ -69,6 +107,7 @@ public class client {
             out.flush();
             // out.writeObject("Uploaded " + totalBytesRead + " of " + fileSize + " bytes");
             // out.flush();
+            isReq = false;
             fileIn.close();
             System.out.println("File upload completed locally.");
             String serverResponse = (String) in.readObject();
@@ -85,19 +124,45 @@ public class client {
 
         BufferedReader userInput = new BufferedReader(new InputStreamReader(System.in));
         try {
-            System.out.println("Enter the name of the file to upload: ");
-            fileName = userInput.readLine();
+            if (!isReq) {
+                System.out.println("Enter the name of the file to upload: ");
+                fileName = userInput.readLine();
+            }
+
+            System.out.println("Processing file upload...");
             File file = new File(fileName);
             fileSize = (int) file.length();
             if (!file.exists() || file.isDirectory()) {
+                out.writeObject("Abort");
+                out.flush();
                 System.out.println("File does not exist or is a directory. Upload aborted.");
                 return;
             }
-            System.out.println("File size: " + fileSize);
-            System.out.println("Enter the type of the file to upload: ");
-            fileType = userInput.readLine();
-            out.writeObject("Uploading File: " + fileName + " and size: " + fileSize + " and type: " + fileType);
-            out.flush();
+            if (!isReq) {
+                System.out.println("File size: " + fileSize);
+                System.out.println("Enter the type of the file to upload: ");
+                fileType = userInput.readLine();
+                if (fileType.isEmpty()) {
+                    fileType = "public";
+                }
+            }
+            if (isReq) {
+                fileType = "public";
+            }
+            if (!isReq) {
+                out.writeObject("Uploading File: " + fileName + " and size: " + fileSize + " and type: " + fileType);
+                out.flush();
+            }
+            if (isReq) {
+                out.writeObject("Uploading File: " + fileName + " and size: " + fileSize + " and type: " + fileType
+                        + " and requestId:" + requestId + " and reqClient:" + reqClientName);
+                out.flush();
+                System.out
+                        .println("Request ID sent: " + requestId + " fileType: " + fileType + " fileName: " + fileName);
+                // String message3 = (String) in.readObject();
+                // System.out.println("Response from server: \n" + message3);
+
+            }
             String message1 = (String) in.readObject();
             System.out.println("Response from server: \n" + message1);
             String message2 = (String) in.readObject();
@@ -125,11 +190,23 @@ public class client {
         out.writeObject(fileType);
         out.flush();
 
-        downloadFiles();
+        Thread downloadThread = new Thread(() -> {
+            try {
+                downloadFiles();
+            } catch (Exception e) {
+                System.err.println("Download thread error: " + e.getMessage());
+            }
+        });
+        downloadThread.start();
+        try {
+            downloadThread.join();
+        } catch (InterruptedException e) {
+            System.err.println("Download interrupted: " + e.getMessage());
+        }
     }
 
     static void downloadFiles() throws ClassNotFoundException, IOException {
-        File fi = new File("downloads/");
+        File fi = new File("downloads/" + userName);
         if (!fi.exists()) {
             fi.mkdir();
         }
@@ -181,13 +258,41 @@ public class client {
     static void readUnreadMessages() {
         System.out.println("Unread Messages" + "\n");
         try {
-            System.out.println((String) in.readObject());
-        } catch (ClassNotFoundException e) {
-            e.printStackTrace();
-        } catch (IOException e) {
+            String resp = (String) in.readObject();
+            System.out.println(resp);
+            if (resp.contains(" wants ")) {
+                String[] messages = resp.split("\n");
+                for (String message : messages) {
+                    if (message.contains(" wants ")) {
+                        BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
+                        System.out.println("Do you give permission: yes or no?");
+                        String ans = br.readLine();
+                        if (ans.equals("yes")) {
+                            out.writeObject("permission granted ");
+                            out.flush();
+                            System.out.println("Processing permission...");
+                            reqClientName = message.split(" wants ")[0].trim();
+                            String[] part = message.split(" requestID:");
+                            if (part.length == 2) {
+                                requestId = part[1].trim();
+                                isReq = true;
+                                System.out.println("Request ID extracted: " + requestId);
+                                handleUploadedFilesOption();
+
+                            } else {
+                                System.out.println("Could not extract request ID. Aborting.");
+                            }
+
+                        } else {
+                            out.writeObject("permission denied ");
+                            out.flush();
+                        }
+                    }
+                }
+            }
+        } catch (ClassNotFoundException | IOException e) {
             e.printStackTrace();
         }
-
     }
 
     static void showClients() throws IOException, ClassNotFoundException {
@@ -195,7 +300,7 @@ public class client {
 
     }
 
-    static void handleClientOption(int option) throws ClassNotFoundException, IOException {
+    static void handleClientOption(int option) throws ClassNotFoundException, IOException, InterruptedException {
         out.writeObject("Capability Option: " + option);
         out.flush();
         String serverAck = (String) in.readObject();
@@ -237,6 +342,10 @@ public class client {
                 System.out.println("Upload & Download History:\n" + logHistory);
                 break;
             case 9:
+                System.out.println("You selected: Send Message");
+                sendMessage();
+                break;
+            case 10:
                 System.out.println("Logout");
                 String logoutMsg = (String) in.readObject();
                 System.out.println(logoutMsg);
@@ -269,7 +378,7 @@ public class client {
             } else
                 System.out.println("Looking for Capabilities:....." + "\n=>yes" + "\n=>no");
             String capability = userInput.readLine();
-            if (!capability.equals("yes") && !capability.equals("no")) {
+            if (!(capability.equals("yes") || capability.equals("y")) && !capability.equals("no")) {
                 System.out.println("Invalid Capability Option. Exiting...");
                 socket.close();
                 return;
@@ -284,12 +393,12 @@ public class client {
                     continue;
                 }
 
-                if (option < 1 || option > 9) {
+                if (option < 1 || option > 10) {
                     System.out.println("Invalid option. Exiting...");
                     break;
                 }
 
-                if (option == 9) {
+                if (option == 10) {
                     handleClientOption(option);
                     break;
                 }
@@ -309,6 +418,8 @@ public class client {
             System.err.println("IOException: " + e.getMessage());
         } catch (ClassNotFoundException e) {
             System.err.println("ClassNotFoundException: " + e.getMessage());
+        } catch (InterruptedException e) {
+            System.err.println("InterruptedException: " + e.getMessage());
         }
     }
 }

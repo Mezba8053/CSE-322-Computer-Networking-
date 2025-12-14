@@ -9,13 +9,14 @@ public class Worker extends Thread {
     Socket socket;
     List<String> clientNames;
     Map<Socket, String> Clients;
+    static Map<String, List<String>> fileRequests = new HashMap<>();
     ObjectOutputStream out;
     ObjectInputStream in;
     String name = "";
     List<String> uploadedFiles = new ArrayList<>();
     static Map<String, String> unreadMessages = new HashMap<>();
-    int maxBufferSize;
-    int remainingBufferSize;
+    long maxBufferSize;
+    long remainingBufferSize;
     int minChunkSize;
     int maxChunkSize;
     static int reqCount = 0;
@@ -30,7 +31,7 @@ public class Worker extends Thread {
     }
 
     public void Initialization() {
-        maxBufferSize = 1024 * 1024;
+        maxBufferSize = 1024L * 1024L * 1024L * 1024L;
         minChunkSize = 10;
         maxChunkSize = 64 * 1024;
         remainingBufferSize = maxBufferSize;
@@ -208,15 +209,47 @@ public class Worker extends Thread {
 
     public void handleUploadedFiles() {
         try {
+            String reqId = "";
+            String reqClientName = "";
+            List<String> reqDetails = null;
             String fileInfo = (String) in.readObject();
+            if (fileInfo.equals("Abort")) {
+                return;
+            }
             StringBuilder sb = new StringBuilder();
             if (fileInfo.startsWith("Uploading File: ")) {
                 sb.append("Server received file info: " + fileInfo);
                 String[] fileParts = fileInfo.split(" and ");
-                String uploadFileName = fileParts[0].substring(16).trim(); // "Uploading File: " is 16 chars
+                String uploadFileName = fileParts[0].substring(16).trim();
                 int uploadFileSize = Integer.parseInt(fileParts[1].substring(6).trim());
                 String uploadFileType = fileParts[2].substring(6).trim();
-                sb.append(uploadFileName + " " + uploadFileSize + " " + uploadFileType);
+                System.out.println("Receiving file: " + uploadFileName + " of size: " +
+                        uploadFileSize + " and type: "
+                        + uploadFileType);
+                // System.out.println("All fileRequests keys: " + fileRequests.keySet());
+                // System.out.println("Looking for reqId: " + reqId);
+                if (fileInfo.contains("requestId:")) {
+                    reqId = fileParts[3].substring(10).trim();
+                    reqClientName = fileParts[4].substring(10).trim();
+                    System.out.println("Request ID received: " + reqId + " for file: " +
+                            uploadFileName);
+                    if (fileRequests.containsKey(reqId)) {
+                        reqDetails = fileRequests.get(reqId);
+                        String reqClient = reqDetails.get(0);
+                        String reqFile = reqDetails.get(1);
+                        System.out.println("Request details found: Client - " + reqClient + ", File - " + reqFile);
+                        if (!reqFile.equals(uploadFileName)) {
+                            out.writeObject("Upload aborted. Request ID does not match the file being uploaded.");
+                            out.flush();
+                            return;
+                        } else {
+
+                            fileRequests.remove(reqId, Arrays.asList(reqClient, reqFile));
+                        }
+                    }
+                } else {
+                    sb.append(uploadFileName + " " + uploadFileSize + " " + uploadFileType);
+                }
                 if (remainingBufferSize < uploadFileSize) {
                     sb.append("Sorry storage has exceeded its limit. Please try again later.");
                     out.writeObject(sb.toString());
@@ -230,16 +263,33 @@ public class Worker extends Thread {
                     out.writeObject("chunks " + chunk +
                             " fileid " + fileId);
                     out.flush();
-                    uploadFiles(uploadFileName, uploadFileSize, uploadFileType);
+                    Thread uploadThread = new Thread(() -> {
+                        uploadFiles(uploadFileName, uploadFileSize, uploadFileType);
+                    });
+                    uploadThread.start();
+                    uploadThread.join();
+                    // uploadFiles(uploadFileName, uploadFileSize, uploadFileType);
+                    if (reqId != null && reqDetails != null) {
+                        String requester = reqDetails.get(0);
+                        String notif = "Client " + name + " uploaded the file '" + uploadFileName
+                                + "' for your request ID '" + reqId + "'.";
+
+                        if (unreadMessages.containsKey(reqClientName)) {
+                            unreadMessages.put(reqClientName, unreadMessages.get(reqClientName) + "\n" + notif);
+                        } else {
+                            unreadMessages.put(reqClientName, notif);
+
+                        }
+                    }
                 }
 
             }
-        } catch (IOException | ClassNotFoundException e) {
+        } catch (IOException | ClassNotFoundException | InterruptedException e) {
             System.err.println("Error handling uploaded files: " + e.getMessage());
         }
     }
 
-    public void handledownloadFiles() throws IOException, ClassNotFoundException {
+    public void handledownloadFiles() throws IOException, ClassNotFoundException, InterruptedException {
         String fileName = (String) in.readObject();
         boolean isFound = false;
         String fileType = (String) in.readObject();
@@ -247,15 +297,32 @@ public class Worker extends Thread {
         if (pub.exists() && pub.isFile() && (fileType.equals(" ") || fileType.equals("public"))) {
             isFound = true;
             String location = pub + fileName;
-            downloadFiles(fileName, pub.getAbsolutePath());
+            // downloadFiles(fileName, pub.getAbsolutePath());
+            Thread downloadThread = new Thread(() -> {
+                try {
+                    downloadFiles(fileName, pub.getAbsolutePath());
+                } catch (IOException e) {
+                    System.err.println("Error in download thread: " + e.getMessage());
+                }
+            });
+            downloadThread.start();
+            downloadThread.join();
 
         }
         if (!isFound) {
             File pri = new File(ROOT_DIR + "/private/" + fileName);
             if (pri.exists() && pri.isFile() && (fileType.equals(" ") || fileType.equals("private"))) {
                 isFound = true;
-                downloadFiles(fileName, pri.getAbsolutePath());
-
+                // downloadFiles(fileName, pri.getAbsolutePath());
+                Thread downloadThread = new Thread(() -> {
+                    try {
+                        downloadFiles(fileName, pri.getAbsolutePath());
+                    } catch (IOException e) {
+                        System.err.println("Error in download thread: " + e.getMessage());
+                    }
+                });
+                downloadThread.start();
+                downloadThread.join();
             }
         }
         if (!isFound) {
@@ -317,13 +384,14 @@ public class Worker extends Thread {
     public void sendMessageToAll(String reqFile, String reqId) throws IOException {
         for (String reqName : clientNames) {
             if (!reqName.equals(name)) {
-                String message = name + " wants this " + reqFile + " file.";
+                String message = name + " wants " + reqFile + " file. requestID:" + reqId;
                 if (!unreadMessages.containsKey(reqName)) {
                     unreadMessages.put(reqName, message);
                 } else {
                     String prev = unreadMessages.get(reqName);
                     unreadMessages.put(reqName, prev + "\n" + message);
                 }
+                fileRequests.put(reqId, Arrays.asList(reqName, reqFile));
 
             }
 
@@ -337,13 +405,14 @@ public class Worker extends Thread {
         boolean found = false;
         for (String reqName : clientNames) {
             if (reqName.equals(reqClient)) {
-                String message = name + " wants this " + reqFile + " file.";
+                String message = name + " wants " + reqFile + " file. requestID:" + reqId;
                 if (!unreadMessages.containsKey(reqName)) {
                     unreadMessages.put(reqName, message);
                 } else {
                     String prev = unreadMessages.get(reqName);
                     unreadMessages.put(reqName, prev + "\n" + message);
                 }
+                fileRequests.put(reqId, Arrays.asList(reqName, reqFile));
                 found = true;
             }
 
@@ -380,10 +449,20 @@ public class Worker extends Thread {
         }
     }
 
-    public void showUnreadMessage() throws IOException {
+    public void showUnreadMessage() throws IOException, ClassNotFoundException {
         if (unreadMessages.containsKey(name)) {
             out.writeObject(unreadMessages.get(name));
             out.flush();
+            String res = (String) in.readObject();
+            if (res.contains("permission granted ")) {
+                res = res.substring(1);
+                String[] parts = res.split(" ");
+                String fileReq = parts[0].trim();
+                String fiName = parts[1].trim();
+
+                handleUploadedFiles();
+
+            }
         } else {
             out.writeObject("No new Message to show");
             out.flush();
@@ -391,7 +470,51 @@ public class Worker extends Thread {
         unreadMessages.remove(name);
     }
 
-    public void handleOption(int option) throws IOException, ClassNotFoundException {
+    public void sendMessage() {
+        try {
+            String recipient = (String) in.readObject();
+            if (!clientNames.contains(recipient) && !recipient.equals("ALL")) {
+                out.writeObject("Sorry Wrong Client Name -_-");
+                out.flush();
+                return;
+            }
+            if (recipient.equals("ALL")) {
+                out.writeObject("Enter your message to send to all clients: ");
+                out.flush();
+                String message = (String) in.readObject();
+                for (String clientName : clientNames) {
+                    if (!clientName.equals(name)) {
+                        if (!unreadMessages.containsKey(clientName)) {
+                            unreadMessages.put(clientName, "Message from " + name + ": " + message);
+                        } else {
+                            String prev = unreadMessages.get(clientName);
+                            unreadMessages.put(clientName, prev + "\nMessage from " + name + ": " + message);
+                        }
+                    }
+                }
+            } else {
+                out.writeObject("Enter your message to send to " + recipient + ": ");
+                out.flush();
+                String message = (String) in.readObject();
+                if (!unreadMessages.containsKey(recipient)) {
+                    unreadMessages.put(recipient, "Message from " + name + ": " + message);
+                } else {
+                    String prev = unreadMessages.get(recipient);
+                    unreadMessages.put(recipient, prev + "\nMessage from " + name + ": " + message);
+                }
+            }
+
+            out.writeObject("Message sent to the client.");
+            out.flush();
+
+        } catch (IOException e) {
+            System.err.println("Error sending message: " + e.getMessage());
+        } catch (ClassNotFoundException e) {
+            System.err.println("Error sending message: " + e.getMessage());
+        }
+    }
+
+    public void handleOption(int option) throws IOException, ClassNotFoundException, InterruptedException {
         switch (option) {
             case 1:
                 checkOnlineClients();
@@ -418,6 +541,9 @@ public class Worker extends Thread {
                 readLogFile();
                 break;
             case 9:
+                sendMessage();
+                break;
+            case 10:
                 logOut();
                 throw new IOException("User logged out");
             default:
@@ -435,22 +561,24 @@ public class Worker extends Thread {
             String userName = (String) in.readObject();
             if (userName.startsWith("Username: ")) {
                 name = userName.substring(10).trim();
-                if (!clientNames.contains(name)) {
-                    clientNames.add(name);
-                    out.writeObject("Welcome, " + name + "!");
-                    out.flush();
-                    Initialization();
-                    createFolder(name);
-                    Clients.put(socket, name);
-                    System.out.println("User '" + name + "' connected.");
-                    // break;
-                } else {
-                    out.writeObject("Username already taken. Please try another one.");
-                    out.flush();
-                    socket.close();
-                    return;
-                }
+                synchronized (clientNames) {
+                    if (!clientNames.contains(name)) {
+                        clientNames.add(name);
+                        out.writeObject("Welcome, " + name + "!");
+                        out.flush();
+                        Initialization();
+                        createFolder(name);
+                        Clients.put(socket, name);
+                        System.out.println("User '" + name + "' connected.");
+                        // break;
+                    } else {
+                        out.writeObject("Username already taken. Please try another one.");
+                        out.flush();
+                        socket.close();
+                        return;
+                    }
 
+                }
             }
             String capability = (String) in.readObject();
             // int option=(int) in.readObject();
@@ -473,7 +601,7 @@ public class Worker extends Thread {
                     handleOption(option);
                 }
             }
-        } catch (IOException | ClassNotFoundException e) {
+        } catch (IOException | ClassNotFoundException | InterruptedException e) {
             e.printStackTrace();
         } finally {
             try {
